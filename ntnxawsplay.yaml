@@ -8,7 +8,7 @@
 #deploying apps on-prem+aws.
 #However, you do end up with an app, called Task Manager, with a SQL Server database that is compatible with
 #Nutanix Database Service (aka Era) - since the front end is in aws the application can be acccessed via the loadbalancer 
-#public IP from any device with a browser from anywhere ionternet connected.
+#public IP from any device with a browser from anywhere internet connected.
 #
 #NB: The middle layer communicates with the back-end via a (reverse) SSH tunnel, this tunnel will drop after about 2 hours, BEWARE when doing
 #eg. a demo, suggest setting up an hour or so before.
