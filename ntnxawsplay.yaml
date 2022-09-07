@@ -1,0 +1,349 @@
+---
+#v1.0 ntnxawsplay.yaml for Microsoft SQL Server back-end.
+#This playbook deploys a 3-tier application architecture.
+#The backend database tier is on Nutanix AHV and the middleware and loadbalancer tiers are on aws.
+#The tasks application that is deployed (a Laravel framework app), and the deployment of it was first done on Nutanix Calm
+#aka Self Service.  I tried to reuse scripts from that deployment where possible - this means 
+#that not every task is performed "the ansible way", nor are these best practices for ansible  or
+#deploying apps on-prem+aws.
+#However, you do end up with an app, called Task Manager, with a SQL Server database that is compatible with
+#Nutanix Database Service (aka Era) - since the front end is in aws the application can be acccessed via the loadbalancer 
+#public IP from any device with a browser from anywhere ionternet connected.
+#
+#NB: The middle layer communicates with the back-end via a (reverse) SSH tunnel, this tunnel will drop after about 2 hours, BEWARE when doing
+#eg. a demo, suggest setting up an hour or so before.
+#
+#You will need a Windows Server 2019 image called "Windows2019.qcow2"  in Prism Central (yes, with the suffix) which you can get at:
+#http://10.42.194.11/workshop_staging/Windows2019.qcow2 - Internal only - or you can build an image - it has to be sysprep'd.
+#Pull the image into your Prism Central via the UI or use getimageplay.yaml,
+#it will pull the image into your Prism Central - edit the ./vars/vars.yaml file before executing any plays.
+#There is no 'delete' deployment logic - you will need to do that manually for AHV and AWS deployed VMs.
+#Also, SQL Studio is installed on the db server so you can use it to query the application database and also eg. snapshoted
+#cloned copies of the application database via Nutanix Database Service (aka ERA)
+#
+#Your ec2 Security Group needs to have the following Inbound Rules defined:
+# IP Version        Type            Protocol      Port range       Source
+# IPv4              all ICMP - IPv4 TCP           All              0.0.0.0/0
+# IPv4              HTTP            TCP           80               0.0.0.0/0
+# IPv4              SSH             TCP           22               0.0.0.0/0
+#
+#WARNING: dbserverkey and dbserverkey.pub rsa files/keys will be "force" overwritten in the playbook directory
+#There are PAUSE tasks in the playbook - they are "long enough" but you might need to extend them to 
+#avoid "failed to connect to host via ssh" errors.
+#Don't forget to copy your AWS .pem file (key pair file) into the directory this play is being run from.
+#hardev@nutanix.com Aug'22
+- name: Deploy Laravel Tasks Application to Nutanix and AWS
+  hosts: localhost
+  gather_facts: False
+  vars_files:
+    - vars/vars.yaml
+  collections:
+    - nutanix.ncp
+  module_defaults:
+    #Edit parameters commented #EDIT to work with your Nutanix Prism Central
+    group/nutanix.ncp.ntnx:
+      nutanix_host: "{{ nutanix_host }}"            #EDIT for your environment - see var/var.yaml
+      nutanix_username: "{{ nutanix_username }}"    #EDIT for your environment - see var/var.yaml
+      nutanix_password: "{{ nutanix_password }}"    #EDIT for your environment - see var/var.yaml
+      validate_certs: false
+  vars:
+    loopdata: 
+      web1:
+        server: "{{ webservervmip }}"
+        index: "0"
+      web2:
+        server: "{{ webservervmip2 }}"
+        index: "1"    
+
+  tasks:
+    - name: (1 of 36) Setting Variables
+      debug: 
+        msg: "{{ ansible_play_name }}  - Did you edit the variables in ./vars/vars.yaml to reflect your environment and optionaly ./varsaws/varsaws.yaml to reflect your environment?" "
+
+    - name: (2 of 36) generate SSH keys for the db server to access the webservers
+      openssh_keypair:
+        path: "./{{dbserver_ssh_key_file}}"
+        type: rsa
+        size: 4096
+        state: present
+        force: true
+
+    - name: (3 of 36) set variable with public key
+      set_fact: 
+         dbserverkeypub: "{{ item }}"
+      with_file: "{{ dbserverPUB_key_file }}"
+
+    - name: (4 of 36) template the password/key for webadmin user into user_data
+      template:
+        src: user_data.j2
+        dest: user_data.sh
+
+    - name: (5 of 36) template Administrator password into sysprep for new SQL Server
+      template:
+        src: sysprep.j2
+        dest: sysprep.txt
+
+    - name: (6 of 36) template SQL server SA password into SQL Server installation script
+      template:
+        src: sqlsvr-installSqlServerps1.j2
+        dest: sqlsvr-installSqlServer.ps1
+
+    - pause:
+        seconds: 60
+
+    - name: (7 of 36) Create database tier MySQL VM
+      ntnx_vms:
+        state: present
+        name: "SQLSERVER-vm"
+        desc: "Backend SQL Server DB for 3-tier tasks application"
+        categories:
+          AppType:
+            - "Default"
+        cluster:
+          name: "{{ cluster_name }}"
+        networks:
+          - is_connected: True
+            subnet:
+              name: "{{ subnet_name }}"
+        disks:
+          - type: "DISK"
+            size_gb: 75
+            bus: "SCSI"
+            clone_image:
+              name: "{{ image_name }}"
+          - type: "DISK"
+            size_gb: 100
+            bus: "SCSI"
+        vcpus: 4
+        cores_per_vcpu: 1
+        memory_gb: 16
+        guest_customization:
+          type: "sysprep"
+          script_path: "{{ script_path }}"
+          is_overridable: True
+      register: output
+
+    - name: (8 of 36) SQL Server vm ip
+      set_fact:
+        sqlservervmip: "{{ output.response.spec.resources.nic_list[0].ip_endpoint_list[0].ip }}"
+
+    - name: (9 of 36) Print out SQL Server VM IP
+      debug:
+        var: "sqlservervmip"
+
+    - name: (10 of 36) Dynamically add newly created Windows VM to the inventory
+      add_host:
+        hostname: "{{ sqlservervmip }}"
+        groups: threetiervms
+        ansible_user: "{{ win_vm_user }}"
+        ansible_password: "{{ win_vm_pw }}"
+        ansible_connection: winrm
+        ansible_winrm_port: 5985
+        ansible_winrm_transport: ntlm
+
+    - pause: #Work around for timing issues.
+        seconds: 180
+
+    - name: (11 of 36) Read file into a variable
+      set_fact: 
+         setdiskps1: "{{ item }}"
+      with_file: "{{ setdiskps1_file }}"
+
+    - name: (12 of 36) Setup "E" Datadisk for SQL Server
+      ansible.windows.win_powershell:
+        script: "{{ setdiskps1 }}"
+      delegate_to: "{{ sqlservervmip }}"
+
+    - name: (13 of 36) Read file into a variable
+      set_fact: 
+         installsqlserverps1: "{{ item }}"
+      with_file: "{{ installsqlserverps1_file }}"
+
+    - name: (13.1 of 36) Read file into a variable
+      set_fact: 
+         installsqlstudiops1: "{{ item }}"
+      with_file: "{{ installsqlstudiops1_file }}"
+
+    - name: (14 of 36) Copy private key to db server so it can access the webservers via ssh
+      ansible.windows.win_copy:
+        src: "dbserverkey"
+        dest: C:\co.txt
+      delegate_to: "{{ sqlservervmip }}"
+
+    - name: (15 of 36) Install SQL Server
+      ansible.windows.win_powershell:
+        script: "{{ installsqlserverps1 }}"
+      delegate_to: "{{ sqlservervmip }}"
+
+    - name: (15.1 of 36) Install SQL Server Management Studio
+      ansible.windows.win_powershell:
+        script: "{{ installsqlstudiops1 }}"
+      delegate_to: "{{ sqlservervmip }}"
+
+    - pause: #Work around for timing issues - need server to finish boot/customizations
+        seconds: 300
+
+    - name: (16 of 36) make a hole in the [fire]wall for SQL Server
+      ansible.windows.win_powershell:
+       script: |
+         New-NetFirewallRule -DisplayName MSSQLTCP1433 -Direction Inbound -LocalPort 1433 -Protocol TCP -Action Allow
+      delegate_to: "{{ sqlservervmip }}"
+
+    - name: (17 of 36) Create the application's database
+      ansible.windows.win_powershell:
+       script: |
+         sqlcmd -U {{ mssql_user }} -P {{ mysql_password }} -Q "CREATE DATABASE {{ mssql_dbname }};"
+      delegate_to: "{{ sqlservervmip }}"
+
+    - name: (18 of 36) Read file into a variable
+      set_fact: 
+         plantkeyps1: "{{ item }}"
+      with_file: "{{ plantkeyps1_file }}"
+
+    - name: (19 of 36) plant ssh private key on db server
+      ansible.windows.win_powershell:
+        script: "{{ plantkeyps1 }}"
+      delegate_to: "{{ sqlservervmip }}"
+
+    - pause: #Work around for timing issues.
+        seconds: 60
+
+
+    - name: (20 of 36) Three Tier VMs - Provision 3x EC2 instances with a public IP address
+      amazon.aws.ec2_instance:
+        count: 3 #hard coded as the requirement is exactly 3 for the playbook to work
+        key_name: "{{ aws_key_file }}"
+        aws_region: "{{ aws_region }}"
+        vpc_subnet_id: "{{ aws_subnet }}" #yes, use the same subnet and probabaly the same AZ!  
+        instance_type: "{{ aws_instance_type }}"
+        security_group: "{{ aws_security_group }}"
+        network:
+          assign_public_ip: true
+        image_id: "{{ aws_image_id }}"
+        tags:
+          environment: Testing
+          Tier: allthree
+        state: running
+        user_data: "{{ lookup('file', cinit_script_path) }}" 
+        wait: yes
+        wait_timeout: 90
+
+      register: result
+
+   - pause: #Work around for timing issues.
+       seconds: 60
+
+    - name: (21 of 36) set variable - webserver1 vm public ip
+      set_fact:
+        webservervmip: "{{ result.instances[0].network_interfaces[0].association.public_ip }}"
+
+    - name: (22 of 36) set variable - webserver2 vm public ip
+      set_fact:
+        webservervmip2: "{{ result.instances[1].network_interfaces[0].association.public_ip }}"
+
+    - name: (23 of 36) set variable - loadbalancer vm public ip
+      set_fact:
+        haproxyvmip: "{{ result.instances[2].network_interfaces[0].association.public_ip }}"
+
+    - name: (24 of 36) name the webserver [1 of 2] in aws 
+      amazon.aws.ec2_tag:
+        region: "{{ aws_region }}"
+        resource: "{{ result.instances[0].instance_id }}"
+        tags:
+          Name: "webservervm1of2"
+        state: present
+
+    - name: (25 of 36) name the webserver [2 of 2] in aws
+      amazon.aws.ec2_tag:
+        region: "{{ aws_region }}"
+        resource: "{{ result.instances[1].instance_id }}"
+        tags:
+          Name: "webservervm2of2"
+        state: present
+
+    - name: (26 of 36) name the loadbalancer in aws
+      amazon.aws.ec2_tag:
+        region: "{{ aws_region }}"
+        resource: "{{ result.instances[2].instance_id }}"
+        tags:
+          Name: "HAProxyvm"
+        state: present
+
+    - name: (27 of 36) Dynamically add newly created VMs x3 to the inventory
+      add_host:
+        hostname: "{{ item }}"
+        groups: threetiervms
+        ansible_ssh_user: "{{ vm_user }}"
+        ansible_ssh_private_key_file: "{{ aws_key_file }}.pem"  #**Here we HAVE to have the .pem suffix
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ConnectTimeout=60"
+      with_items:
+      - "{{ haproxyvmip }}"
+      - "{{ webservervmip }}"
+      - "{{ webservervmip2 }}"
+
+    - pause: #Work around for timing issues.
+        seconds: 60
+
+    #Write webserver IPs to file on dbserver C:\webs.txt
+    - name: (28 of 36) Read file into a variable
+      set_fact: 
+         plantkeyps1: "{{ item }}"
+      with_file: "{{ plantkeyps1_file }}"
+
+    - name: (29 of 36) Plant key for remote access to webservers by dbserver
+      ansible.windows.win_powershell:
+        script: "{{ plantkeyps1 }}"
+      delegate_to: "{{ sqlservervmip }}"
+
+    - name: (30 of 36) Install/Setup HAProxy
+      ansible.builtin.script: "./setupHAProxy.sh {{ webservervmip + ',' + webservervmip2 }}"
+      delegate_to: "{{ haproxyvmip }}"
+    
+    #Setup tunnels from the dbserver
+
+    - name: (31 of 36) Write web server IPs to database server so it know where to start the ssh tunnels
+      ansible.windows.win_powershell:
+       script: |
+         Add-Content -Path {{ webserveriplist_file }} -Value "{{webservervmip}},{{webservervmip2}}"
+      delegate_to: "{{ sqlservervmip }}"
+
+    - name: (32 of 36) Read file into a variable
+      set_fact: 
+         setuptunnelps1: "{{ item }}"
+      with_file: "{{ setuptunnelps1_file }}"
+
+    - name: (33 of 36) Create ssh tunnels for remote access to webservers by dbserver
+      ansible.windows.win_powershell:
+        script: "{{ setuptunnelps1 }}"
+      delegate_to: "{{ sqlservervmip }}"
+
+    - name: (34 of 36) WebServer - Install/Setup Webserver x2 - install nginx/PHP/laravel/Task application
+      ansible.builtin.script: "./setupWebServer.sh {{ mssql_dbname + ' ' + mysql_password + ' ' + mssql_user + ' ' + item.index }}"
+      delegate_to: "{{ item.server }}"
+      with_items:
+      - "{{ loopdata.web1 }}"
+      - "{{ loopdata.web2 }}"
+
+    - name: (35 of 36) WebServer - Install/Setup Webserver - customize the app web page x2
+      ansible.builtin.script: "./customizePHP.sh {{ item.index }}"
+      delegate_to: "{{ item.server }}"
+      with_items:
+      - "{{ loopdata.web1 }}"
+      - "{{ loopdata.web2 }}"
+
+    - name: Set Output message for completion
+      ansible.builtin.set_fact: 
+        final_msg: | 
+          {{'"'}}HAProxy/loadbalancer IP:  {{haproxyvmip}} Webserver1of2 IP: {{webservervmip}} Webserver2of2 IP:  {{webservervmip2}} Open a web browser at the HAProxy IP Address to get to the Tasks application.{{'"'}}
+    
+    - name: (36 of 36) Print out final message
+      debug:
+        msg:  "{{ final_msg }}"
+
+    - mail: 
+        from: "no-reply@deemoo.org"
+        to: "{{ email }}"
+        subject: "Nutanix+Ansible - Tasks Application has deployed"
+        body: "HAProxy/loadbalancer Public ip:   {{ haproxyvmip }} \n\nWebserver 1 of 2 Public ip:       {{ webservervmip }}\nWebserver 2 of 2 Public ip:       {{ webservervmip2 }}\n\nTasks Application is available at:\n    http://{{ haproxyvmip }}"
+      when: email is defined
+      delegate_to: "localhost"
