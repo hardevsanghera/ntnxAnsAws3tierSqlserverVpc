@@ -58,7 +58,7 @@
   tasks:
     - name: (1 of 36) Setting Variables
       debug: 
-        msg: "{{ ansible_play_name }}  - Did you edit the variables in ./vars/vars.yaml to reflect your environment and optionaly ./varsaws/varsaws.yaml to reflect your environment?" "
+        msg: "{{ ansible_play_name }}  - Did you edit the variables in ./vars/vars.yaml to reflect your environment and optionaly ./varsaws/varsaws.yaml to reflect your environment?"
 
     - name: (2 of 36) generate SSH keys for the db server to access the webservers
       openssh_keypair:
@@ -230,7 +230,7 @@
 
       register: result
 
-   - pause: #Work around for timing issues.
+    - pause: #Work around for timing issues.
        seconds: 60
 
     - name: (21 of 36) set variable - webserver1 vm public ip
