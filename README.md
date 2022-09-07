@@ -1,5 +1,5 @@
 # ntnxAnsAws3tierSqlserver
-<p>Ansible playbooks to deploy 3-tier Tasks Laravel web app with Microsoft SQL Server dbserver (on Nutanix AHV) and nginx web servers/loadbalancer on AWS.</p>
+<p>Ansible playbooks to deploy 3-tier Tasks Laravel web app with Microsoft SQL Server dbserver (on Nutanix AHV) and nginx web servers/loadbalancer on AWS.</p><p>The deployed database server is Nutanix Database Server (aka Era) compatible.
 <p>The main playbook has copious comments: ntnxawsplay.yaml</p>
 
 <h2>Application Architecture</h2>
