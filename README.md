@@ -20,6 +20,7 @@
      <li>AWS Account with valid API key and secret key, if you can run the aws cli then you rshould be good with the permissions you have - I used the authentication method of using a credentials file in your ~/.aws directory.</li>
      <li>AWS VPC including subnet, key pair (pem file) and inbound security group rules - see the comments in the playbook.  The provided setupVpc.yaml playbook will setup the VPC for you and edit variables as required.</li>
      <li>Nutanix AHV based cluster managed by Prism Central (PC), with credentials</li>
+     <li>The subnet you use in the cluster HAS to be managed, ie. have a pool of IPs defined.</li>
      <li>Windows AHV disk image, from here: http://10.42.194.11/workshop_staging/Windows2019.qcow2 (Internal only - or you can make your won - should be sysprep'd)- the getImageplay.yaml Ansible playbook will fetch the image for you - edit vars/vars.yaml first.
 </ol>
 <h1>How to install and get the webapp working</h1>
