@@ -17,7 +17,7 @@
 <ol>
      <li>Ansible core 2.13.2</li>
      <li>Nutanix Ansible Module: https://github.com/nutanix/nutanix.ansible - great blog walk-thru: https://www.nutanix.dev/2022/08/05/getting-started-with-the-nutanix-ansible-module/</li>
-     <li>AWS Account with valid API key and secret key, if you can run the aws cli then you rshould be good with the permissions you have - I used the authentication method of using a credentials file in your ~/.aws directory.</li>
+     <li>AWS Account with valid API key and secret key, if you can run the aws cli then you should be good with the permissions you have - I used the authentication method of using a credentials file in your ~/.aws directory.  run: "$aws sts get-caller-identity" to test connectivity to your AWS account, your account nummber should be returned.</li>
      <li>AWS VPC including subnet, key pair (pem file) and inbound security group rules - see the comments in the playbook.  The provided setupVpc.yaml playbook will setup the VPC for you and edit variables as required.</li>
      <li>Nutanix AHV based cluster managed by Prism Central (PC), with credentials</li>
      <li>The subnet you use in the cluster HAS to be managed, ie. have a pool of IPs defined.</li>
