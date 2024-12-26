@@ -1,5 +1,5 @@
 ## Setup reverse ssh tunnel on webserver(s)
-#So the webservers access the SQL Server Dtatase Server via 127.0.0.1:8888 (from their
+#So the webservers access the SQL Server Datatase Server via 127.0.0.1:8888 (from their
 #point of view) this port id forwarded to port 1433 on the dtabase server.  No VPN to AWS necessary!
 #hardev@nutanix.com Aug'22
 
